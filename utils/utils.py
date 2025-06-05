@@ -1,7 +1,6 @@
-from math import sin, cos, sqrt, atan2, radians, asin
+from math import sin, cos, sqrt, radians, asin
 import numpy as np
 import torch
-
 
 def resample_trajectory(x, length=200):
     """
@@ -22,7 +21,6 @@ def resample_trajectory(x, length=200):
         resampled_trajectory[i] = np.interp(time_steps, np.arange(len_x), x[i])
     return resampled_trajectory.T
 
-
 def time_warping(x, length=200):
     """
     Resamples a trajectory to a new length.
@@ -35,7 +33,6 @@ def time_warping(x, length=200):
         warped_trajectory[i] = np.interp(time_steps, np.arange(len_x), x[i])
     return warped_trajectory.T
 
-
 def gather(consts: torch.Tensor, t: torch.Tensor):
     """
     Gather consts for $t$ and reshape to feature map shape
@@ -46,7 +43,6 @@ def gather(consts: torch.Tensor, t: torch.Tensor):
     c = consts.gather(-1, t)
     return c.reshape(-1, 1, 1)
 
-
 def q_xt_x0(x0, t, alpha_bar):
     # get mean and var of xt given x0
     mean = gather(alpha_bar, t) ** 0.5 * x0
@@ -56,12 +52,10 @@ def q_xt_x0(x0, t, alpha_bar):
     xt = mean + (var ** 0.5) * eps
     return xt, eps  # also returns noise
 
-
 def compute_alpha(beta, t):
     beta = torch.cat([torch.zeros(1).to(beta.device), beta], dim=0)
     a = (1 - beta).cumprod(dim=0).index_select(0, t + 1).view(-1, 1, 1)
     return a
-
 
 def p_xt(xt, noise, t, next_t, beta, eta=0):
     at = compute_alpha(beta.cuda(), t.long())
@@ -73,7 +67,6 @@ def p_xt(xt, noise, t, next_t, beta, eta=0):
     xt_next = at_next.sqrt() * x0_t + c1 * eps + c2 * noise
     return xt_next
 
-
 def divide_grids(boundary, grids_num):
     lati_min, lati_max = boundary['lati_min'], boundary['lati_max']
     long_min, long_max = boundary['long_min'], boundary['long_max']
@@ -84,7 +77,6 @@ def divide_grids(boundary, grids_num):
     latgrids = np.arange(lati_min, lati_max, lati_interval)
     longrids = np.arange(long_min, long_max, long_interval)
     return latgrids, longrids
-
 
 # calculte the distance between two points
 def distance(lat1, lon1, lat2, lon2):

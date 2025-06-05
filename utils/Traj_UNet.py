@@ -1,10 +1,8 @@
-import math
 import torch
 import torch.nn as nn
 import numpy as np
 from types import SimpleNamespace
 import torch.nn.functional as F
-
 
 def get_timestep_embedding(timesteps, embedding_dim):
     assert len(timesteps.shape) == 1
@@ -19,7 +17,6 @@ def get_timestep_embedding(timesteps, embedding_dim):
         emb = torch.nn.functional.pad(emb, (0, 1, 0, 0))
     return emb
 
-
 class Attention(nn.Module):
     def __init__(self, embedding_dim):
         super(Attention, self).__init__()
@@ -31,7 +28,6 @@ class Attention(nn.Module):
         # apply softmax along the attributes dimension
         weights = F.softmax(weights, dim=1)
         return weights
-
 
 class WideAndDeep(nn.Module):
     def __init__(self, embedding_dim=128, hidden_dim=256):
@@ -71,18 +67,15 @@ class WideAndDeep(nn.Module):
 
         return combined_embed
 
-
 def nonlinearity(x):
     # swish
     return x * torch.sigmoid(x)
-
 
 def Normalize(in_channels):
     return torch.nn.GroupNorm(num_groups=32,
                               num_channels=in_channels,
                               eps=1e-6,
                               affine=True)
-
 
 class Upsample(nn.Module):
     def __init__(self, in_channels, with_conv=True):
@@ -102,7 +95,6 @@ class Upsample(nn.Module):
         if self.with_conv:
             x = self.conv(x)
         return x
-
 
 class Downsample(nn.Module):
     def __init__(self, in_channels, with_conv=True):
@@ -124,7 +116,6 @@ class Downsample(nn.Module):
         else:
             x = torch.nn.functional.avg_pool2d(x, kernel_size=2, stride=2)
         return x
-
 
 class ResnetBlock(nn.Module):
     def __init__(self,
@@ -186,7 +177,6 @@ class ResnetBlock(nn.Module):
 
         return x + h
 
-
 class AttnBlock(nn.Module):
     def __init__(self, in_channels):
         super().__init__()
@@ -233,7 +223,6 @@ class AttnBlock(nn.Module):
         h_ = self.proj_out(h_)
 
         return x + h_
-
 
 class Model(nn.Module):
     def __init__(self, config):
@@ -398,7 +387,6 @@ class Model(nn.Module):
         h = self.conv_out(h)
         return h
 
-
 class Guide_UNet(nn.Module):
     def __init__(self, config):
         super(Guide_UNet, self).__init__()
@@ -421,7 +409,6 @@ class Guide_UNet(nn.Module):
         pred_noise = cond_noise + self.guidance_scale * (cond_noise -
                                                          uncond_noise)
         return pred_noise
-
 
 if __name__ == '__main__':
     from utils.config_WD import args

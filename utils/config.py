@@ -1,8 +1,8 @@
 args = {
     'data': {
         'dataset': 'Chengdu',
-        'traj_path1': '/xxxxxxx',
-        'head_path2': '/xxxxxxx',
+        'traj_path1': './data/randsine/X.npy',
+        'head_path2': './data/randsine/X_head.npy',
         'traj_length': 200,
         'channels': 2,
         'uniform_dequantization': False,
@@ -32,11 +32,15 @@ args = {
         'num_diffusion_timesteps': 500,
     },
     'training': {
-        'batch_size': 1024,
+        'batch_size': 128,
         'n_epochs': 200,
         'n_iters': 5000000,
         'snapshot_freq': 5000,
         'validation_freq': 2000,
+        'lr': 2e-4,
+        'device': 'mps',
+        'num_workers': 8,
+        'log_interval': 10,
     },
     'sampling': {
         'batch_size': 64,
