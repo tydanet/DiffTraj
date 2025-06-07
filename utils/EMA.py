@@ -1,7 +1,4 @@
-import torch
 import torch.nn as nn
-import torch.nn.functional as F
-
 
 class EMAHelper(object):
     def __init__(self, mu=0.999):
@@ -50,3 +47,4 @@ class EMAHelper(object):
 
     def load_state_dict(self, state_dict):
         self.shadow = state_dict
+        

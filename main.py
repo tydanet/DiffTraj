@@ -10,8 +10,9 @@ from numpy import dtype
 from pandas import json_normalize
 from torch.utils.data import TensorDataset, DataLoader
 
-from types import SimpleNamespace
-from utils.config import args
+# from utils.config import args
+from datasets.random_sinusoids import RandomSinusoids
+from utils import utils
 from utils.EMA import EMAHelper
 from utils.Traj_UNet import *
 
@@ -32,13 +33,40 @@ def main(config):
         return mean + (var**0.5) * eps, eps  # also returns noise
 
     # Create the model
-    unet = Guide_UNet(config).to(config.training.device)
-    # print(unet)
-    traj = np.load(config.data.traj_path1,
-                   allow_pickle=True)
-    traj = traj[:, :, :2]
-    head = np.load(config.data.head_path2,
-                   allow_pickle=True)
+    unet = Guide_UNetContinuous(config).to(config.training.device)
+
+    if config.data.dataset == 'Path':
+        traj = np.load(config.data.datasets.path.traj_path1, allow_pickle=True)
+        head = np.load(config.data.head_path2, allow_pickle=True)
+        assert traj.shape[1] == config.data.traj_length
+        assert traj.shape[2] == config.data.channels
+        assert head.shape[1] == config.model.attr_dim
+
+    elif config.data.dataset == 'RandomSinusoids':
+        tmp_dataset = RandomSinusoids(
+            1, 
+            config.data.traj_length,
+            config.data.channels)
+        n = config.data.datasets.random_sinusoids.warmup_size
+        traj = torch.stack([tmp_dataset[0] for _ in range(n)])
+        head = utils.get_conditioning(traj)
+
+    tmu = traj.mean(axis=0, keepdims=1)
+    tsigma = traj.std(axis=0, keepdims=1)
+    traj = (traj - tmu) / tsigma
+    np.save('/tmp/traj_mu.npy', tmu)
+    np.save('/tmp/traj_sigma.npy', tsigma)
+    mlflow.log_artifact('/tmp/traj_mu.npy')
+    mlflow.log_artifact('/tmp/traj_sigma.npy')
+
+    hmu = head.mean(axis=0, keepdims=1)
+    hsigma = head.std(axis=0, keepdims=1)
+    head = (head - hmu) / hsigma
+    np.save('/tmp/head_mu.npy', hmu)
+    np.save('/tmp/head_sigma.npy', hsigma)
+    mlflow.log_artifact('/tmp/head_mu.npy')
+    mlflow.log_artifact('/tmp/head_sigma.npy')
+
     traj = np.swapaxes(traj, 1, 2)
     traj = torch.from_numpy(traj).float()
     head = torch.from_numpy(head).float()
@@ -56,7 +84,15 @@ def main(config):
     # traj: [batch_size, 2, traj_length]   2: latitude and longitude
     # head: [batch_size, 8]   8: departure_time, trip_distance,  trip_time, trip_length, avg_dis, avg_speed, start_id, end_id
     ###########################################################
-    dataset = TensorDataset(traj, head)
+    if config.data.dataset == 'Path':
+        dataset = TensorDataset(traj, head)
+    
+    elif config.data.dataset == 'RandomSinusoids':
+        dataset = RandomSinusoids(
+            config.data.datasets.random_sinusoids.size, 
+            config.data.traj_length, 
+            config.data.channels)
+        
     dataloader = DataLoader(dataset,
                             batch_size=config.training.batch_size,
                             shuffle=True,
@@ -65,13 +101,15 @@ def main(config):
     # Training params
     # Set up some parameters
     n_steps = config.diffusion.num_diffusion_timesteps
-    beta = torch.linspace(config.diffusion.beta_start,
-                          config.diffusion.beta_end, n_steps).to(config.training.device)
+    beta = torch.linspace(
+        config.diffusion.beta_start,
+        config.diffusion.beta_end, 
+        n_steps).to(config.training.device)
+    
     alpha = 1. - beta
     alpha_bar = torch.cumprod(alpha, dim=0)
-    lr = config.training.lr  # Explore this - might want it lower when training on the full dataset
+    lr = float(config.training.lr)  # Explore this - might want it lower when training on the full dataset
 
-    losses = []  # Store losses for later plotting
     # optimizer
     optim = torch.optim.AdamW(unet.parameters(), lr=lr)  # Optimizer
 
@@ -82,8 +120,10 @@ def main(config):
     else:
         ema_helper = None
 
-    for epoch in range(1, config.training.n_epochs + 1):
-        for _, (trainx, head) in enumerate(tqdm.tqdm(dataloader)):
+    for epoch in tqdm.tqdm(range(1, config.training.n_epochs + 1)):
+        losses = []
+
+        for _, (trainx, head) in enumerate(dataloader):
             x0 = trainx.to(config.training.device)
             head = head.to(config.training.device)
             t = torch.randint(low=0, high=n_steps,
@@ -94,7 +134,14 @@ def main(config):
             # Run xt through the network to get its predictions
             pred_noise = unet(xt.float(), t, head)
             # Compare the predictions with the targets
-            loss = F.mse_loss(noise.float(), pred_noise)
+            loss = config.training.reconstruction_loss_w * F.mse_loss(noise.float(), pred_noise)
+
+            if config.training.condition_loss_w > 0:
+                noise_cond = utils.get_conditioning(noise.swapaxes(1, 2))
+                pred_noise_cond = utils.get_conditioning(pred_noise.swapaxes(1, 2))
+                cond_loss = config.training.condition_loss_w * F.mse_loss(noise_cond, pred_noise_cond)
+                loss = loss + cond_loss
+
             # Store the loss for later viewing
             losses.append(loss.item())
             optim.zero_grad()
@@ -105,21 +152,33 @@ def main(config):
                 ema_helper.update(unet)
 
         if epoch % config.training.log_interval == 0:
-            mlflow.pytorch.log_model(unet, f'unet_{epoch}', signature=signature)
+            mlflow.pytorch.log_model(unet, f'unet_{epoch:05}', signature=signature)
 
-        mlflow.log_metric('Loss', f"{loss:4f}", step=epoch)
+        mlflow.log_metric('Loss', f"{np.mean(losses):4f}", step=epoch)
         mlflow.pytorch.log_model(unet, f'unet_latest', signature=signature)
 
 if __name__ == "__main__":
+    import argparse
+
+    import yaml
+
     with mlflow.start_run():
         mlflow.set_tracking_uri('http://127.0.0.1:9090')
+
+        parser = argparse.ArgumentParser()
+        parser.add_argument('-c', '--config', required=True)
+        args = parser.parse_args()
+        mlflow.log_artifact(args.config)
+
+        with open(args.config, 'r') as f:
+            args = yaml.load(f, Loader=yaml.CLoader)
+
         params = json_normalize(args).T.to_dict().get(0)
         mlflow.log_params(params)
-        # Load configuration
-        
-        temp = {}
-        for k, v in args.items():
-            temp[k] = SimpleNamespace(**v)
-        config = SimpleNamespace(**temp)
+        config = utils.load_config(args)
 
-        main(config)
+        try:
+            main(config)
+
+        except KeyboardInterrupt:
+            pass

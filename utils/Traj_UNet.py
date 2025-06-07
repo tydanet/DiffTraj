@@ -13,8 +13,10 @@ def get_timestep_embedding(timesteps, embedding_dim):
     emb = emb.to(device=timesteps.device)
     emb = timesteps.float()[:, None] * emb[None, :]
     emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=1)
-    if embedding_dim % 2 == 1:  # zero pad
+    
+    if embedding_dim % 2 == 1: # zero pad
         emb = torch.nn.functional.pad(emb, (0, 1, 0, 0))
+    
     return emb
 
 class Attention(nn.Module):
@@ -24,11 +26,47 @@ class Attention(nn.Module):
 
     def forward(self, x):
         # x shape: (batch_size, num_attributes, embedding_dim)
-        weights = self.fc(x)  # shape: (batch_size, num_attributes, 1)
+        weights = self.fc(x) # shape: (batch_size, num_attributes, 1)
         # apply softmax along the attributes dimension
         weights = F.softmax(weights, dim=1)
         return weights
 
+class WideAndDeepContinuous(nn.Module):
+    def __init__(self, embedding_dim=128, hidden_dim=256):
+        super().__init__()
+        cond_dim = 14 # hard code for now
+        # Wide part (linear model for continuous attributes excepting od-pair)
+        self.wide_fc = nn.Linear(cond_dim - 4, embedding_dim)
+
+        # Deep part (neural network for od-pair)
+        self.ogn_embedding = nn.Linear(2, hidden_dim) # nn.Embedding(257, hidden_dim)
+        self.dst_embedding = nn.Linear(2, hidden_dim) # nn.Embedding(257, hidden_dim)
+        self.deep_fc1 = nn.Linear(hidden_dim*2, embedding_dim)
+        self.deep_fc2 = nn.Linear(embedding_dim, embedding_dim)
+
+    def forward(self, attr):
+        # Continuous attributes
+        continuous_attrs = attr[:, 4:]
+
+        ogn = attr[:, 0:2]
+        dst = attr[:, 2:4]
+
+        # Wide part
+        wide_out = self.wide_fc(continuous_attrs)
+
+        # Deep part
+        ogn_embed = self.ogn_embedding(ogn)
+        dst_embed = self.dst_embedding(dst)
+        od_embed = torch.cat((ogn_embed, dst_embed), dim=1)
+
+        deep_out = F.relu(self.deep_fc1(od_embed))
+        deep_out = self.deep_fc2(deep_out)
+
+        # Combine wide and deep embeddings
+        combined_embed = wide_out + deep_out
+
+        return combined_embed
+    
 class WideAndDeep(nn.Module):
     def __init__(self, embedding_dim=128, hidden_dim=256):
         super(WideAndDeep, self).__init__()
@@ -342,30 +380,31 @@ class Model(nn.Module):
         temb = self.temb.dense[0](temb)
         temb = nonlinearity(temb)
         temb = self.temb.dense[1](temb)
+
         if extra_embed is not None:
             temb = temb + extra_embed
 
         # downsampling
         hs = [self.conv_in(x)]
-        # print(hs[-1].shape)
+
         for i_level in range(self.num_resolutions):
             for i_block in range(self.num_res_blocks):
                 h = self.down[i_level].block[i_block](hs[-1], temb)
-                # print(i_level, i_block, h.shape)
+
                 if len(self.down[i_level].attn) > 0:
                     h = self.down[i_level].attn[i_block](h)
+
                 hs.append(h)
+
             if i_level != self.num_resolutions - 1:
                 hs.append(self.down[i_level].downsample(hs[-1]))
 
         # middle
-        # print(hs[-1].shape)
-        # print(len(hs))
         h = hs[-1]  # [10, 256, 4, 4]
         h = self.mid.block_1(h, temb)
         h = self.mid.attn_1(h)
         h = self.mid.block_2(h, temb)
-        # print(h.shape)
+
         # upsampling
         for i_level in reversed(range(self.num_resolutions)):
             for i_block in range(self.num_res_blocks + 1):
@@ -378,6 +417,7 @@ class Model(nn.Module):
                 # print(i_level, i_block, h.shape)
                 if len(self.up[i_level].attn) > 0:
                     h = self.up[i_level].attn[i_block](h)
+
             if i_level != 0:
                 h = self.up[i_level].upsample(h)
 
@@ -395,8 +435,6 @@ class Guide_UNet(nn.Module):
         self.attr_dim = config.model.attr_dim
         self.guidance_scale = config.model.guidance_scale
         self.unet = Model(config)
-        # self.guide_emb = Guide_Embedding(self.attr_dim, self.ch)
-        # self.place_emb = Place_Embedding(self.attr_dim, self.ch)
         self.guide_emb = WideAndDeep(self.ch)
         self.place_emb = WideAndDeep(self.ch)
 
@@ -410,28 +448,22 @@ class Guide_UNet(nn.Module):
                                                          uncond_noise)
         return pred_noise
 
-if __name__ == '__main__':
-    from utils.config_WD import args
+class Guide_UNetContinuous(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.ch = config.model.ch * 4
+        self.attr_dim = config.model.attr_dim
+        self.guidance_scale = config.model.guidance_scale
+        self.unet = Model(config)
+        self.guide_emb = WideAndDeepContinuous(self.ch)
+        self.place_emb = WideAndDeepContinuous(self.ch)
 
-    temp = {}
-    for k, v in args.items():
-        temp[k] = SimpleNamespace(**v)
-
-    config = SimpleNamespace(**temp)
-    t = torch.randn(10)
-    depature = torch.zeros(10)
-    avg_dis = torch.zeros(10)
-    avg_speed = torch.zeros(10)
-    total_dis = torch.zeros(10)
-    total_time = torch.zeros(10)
-    total_len = torch.zeros(10)
-    sid = torch.zeros(10)
-    eid = torch.zeros(10)
-    attr = torch.stack(
-        [depature, total_dis, total_time, total_len, avg_dis, avg_speed, sid, eid], dim=1)
-    unet = Guide_UNet(config)
-    x = torch.randn(10, 2, 200)
-    total_params = sum(p.numel() for p in unet.parameters())
-    print(f'{total_params:,} total parameters.')
-    out = unet(x, t, attr)
-    print(out.shape)
+    def forward(self, x, t, attr):
+        guide_emb = self.guide_emb(attr)
+        place_vector = torch.zeros(attr.shape, device=attr.device)
+        place_emb = self.place_emb(place_vector)
+        cond_noise = self.unet(x, t, guide_emb)
+        uncond_noise = self.unet(x, t, place_emb)
+        pred_noise = cond_noise + self.guidance_scale * (cond_noise - uncond_noise)
+        return pred_noise
