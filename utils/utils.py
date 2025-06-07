@@ -4,6 +4,15 @@ from types import SimpleNamespace
 import numpy as np
 import torch
 
+class RecursiveNamespace(SimpleNamespace):
+    @staticmethod
+    def map_entry(entry):
+        if isinstance(entry, dict):
+            return RecursiveNamespace(**entry)
+        return entry
+    def __init__(self, **kwargs):
+        super().__init__(**{k: RecursiveNamespace.map_entry(v) for k, v in kwargs.items()})
+
 def resample_trajectory(x, length=200):
     """
     Resamples a trajectory to a new length.
@@ -95,15 +104,6 @@ def distance(lat1, lon1, lat2, lon2):
     c = 2 * asin(sqrt(a))
     r = 6371  # Radius of earth in kilometers. Use 3956 for miles
     return c * r * 1000
-
-def load_config(args):
-    temp = {}
-
-    for k, v in args.items():
-        temp[k] = SimpleNamespace(**v)
-
-    config = SimpleNamespace(**temp)
-    return config
 
 def run_diffusion(net, head, config, device=None):
     if device is None:

@@ -37,7 +37,7 @@ def main(config):
 
     if config.data.dataset == 'Path':
         traj = np.load(config.data.datasets.path.traj_path1, allow_pickle=True)
-        head = np.load(config.data.head_path2, allow_pickle=True)
+        head = np.load(config.data.datasets.path.head_path2, allow_pickle=True)
         assert traj.shape[1] == config.data.traj_length
         assert traj.shape[2] == config.data.channels
         assert head.shape[1] == config.model.attr_dim
@@ -49,7 +49,8 @@ def main(config):
             config.data.channels)
         n = config.data.datasets.random_sinusoids.warmup_size
         traj = torch.stack([tmp_dataset[0] for _ in range(n)])
-        head = utils.get_conditioning(traj)
+        head = utils.get_conditioning(traj).numpy()
+        traj = traj.numpy()
 
     tmu = traj.mean(axis=0, keepdims=1)
     tsigma = traj.std(axis=0, keepdims=1)
@@ -86,17 +87,20 @@ def main(config):
     ###########################################################
     if config.data.dataset == 'Path':
         dataset = TensorDataset(traj, head)
-    
+        
     elif config.data.dataset == 'RandomSinusoids':
         dataset = RandomSinusoids(
             config.data.datasets.random_sinusoids.size, 
             config.data.traj_length, 
-            config.data.channels)
+            config.data.channels,
+            return_cond=True,
+            swap_channels=False)
         
-    dataloader = DataLoader(dataset,
-                            batch_size=config.training.batch_size,
-                            shuffle=True,
-                            num_workers=config.training.num_workers)
+    dataloader = DataLoader(
+        dataset,
+        batch_size=config.training.batch_size,
+        shuffle=True,
+        num_workers=config.training.num_workers)
 
     # Training params
     # Set up some parameters
@@ -126,8 +130,10 @@ def main(config):
         for _, (trainx, head) in enumerate(dataloader):
             x0 = trainx.to(config.training.device)
             head = head.to(config.training.device)
-            t = torch.randint(low=0, high=n_steps,
-                              size=(len(x0) // 2 + 1,)).to(config.training.device)
+            t = torch.randint(
+                low=0, 
+                high=n_steps,
+                size=(len(x0) // 2 + 1,)).to(config.training.device)
             t = torch.cat([t, n_steps - t - 1], dim=0)[:len(x0)]
             # Get the noised images (xt) and the noise (our target)
             xt, noise = q_xt_x0(x0, t)
@@ -175,7 +181,7 @@ if __name__ == "__main__":
 
         params = json_normalize(args).T.to_dict().get(0)
         mlflow.log_params(params)
-        config = utils.load_config(args)
+        config = utils.RecursiveNamespace(**args)
 
         try:
             main(config)
