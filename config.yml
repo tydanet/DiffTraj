@@ -2,10 +2,7 @@ data:
   dataset: RandomSinusoids # currently Path or RandomSinusoids
   traj_length: 200 # number of points along the trajectory
   channels: 2 # number of i/o channels
-  uniform_dequantization: false # unused?
-  gaussian_dequantization: false # unused?
-  num_workers: true # unused?
-  datasets: # dataset-spefic configs
+  datasets: # dataset-specific configs
     path:
       traj_path1: "./data/randsine/X.npy" # location of raw trajectories
       head_path2: "./data/randsine/X_head.npy" # location of trajectory conditioinal info
@@ -13,38 +10,26 @@ data:
       size: 10240 # size of dataset per training epoch
       warmup_size: 1000000 # number of samples used to compute mu and sigma
 model:
-  type: simple # unused?
   attr_dim: 14 # dimensionality ofcondition vector
   guidance_scale: 3
-  in_channels: 2 
-  out_ch: 2
   ch: 128
   ch_mult: [1, 2, 2, 2]
   num_res_blocks: 2
   attn_resolutions: [16]
   dropout: 0.1
-  var_type: fixedlarge
   ema_rate: 0.9999
   ema: true
   resamp_with_conv: true
 diffusion:
-  beta_scheduler: linear
   beta_start: 0.0001
   beta_end: 0.05
   num_diffusion_timesteps: 500
 training:
   batch_size: 256
   n_epochs: 200
-  n_iters: 5000000
-  snapshot_freq: 5000
-  validation_freq: 2000
   lr: 2e-4
   device: mps
   num_workers: 8
   log_interval: 10
   reconstruction_loss_w: 1.0
-  condition_loss_w: 0.1
-sampling:
-  batch_size: 256
-  last_only: true
-
+  condition_loss_w: 0.0
